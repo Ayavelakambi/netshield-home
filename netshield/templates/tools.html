@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Tools — NetShield Home{% endblock %}
+{% block content %}
+<h1>Network tools <span class="muted small">Wireshark-style + Linux tools that run on Windows</span></h1>
+
+{% if not admin %}
+<div class="banner warning">Tools are admin-only.</div>
+{% else %}
+<div class="grid-2">
+  <div class="card">
+    <h2>dig — DNS lookup <span class="muted small">any resolver</span></h2>
+    <form id="dig-form" class="inline-form">
+      <input type="text" name="domain" placeholder="domain.com" required>
+      <input type="text" name="resolver" value="8.8.8.8" placeholder="resolver" style="width:110px">
+      <select name="qtype">
+        <option value="1">A</option><option value="28">AAAA</option>
+        <option value="5">CNAME</option><option value="15">MX</option>
+        <option value="16">TXT</option><option value="2">NS</option>
+      </select>
+      <button class="btn small" type="submit">Lookup</button>
+    </form>
+    <pre id="dig-out" class="tool-out">Results appear here…</pre>
+  </div>
+
+  <div class="card">
+    <h2>whois — RDAP lookup <span class="muted small">who owns an IP</span></h2>
+    <form id="rdap-form" class="inline-form">
+      <input type="text" name="ip" placeholder="IP address" required>
+      <button class="btn small" type="submit">Whois</button>
+    </form>
+    <pre id="rdap-out" class="tool-out">Results appear here…</pre>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Live packet capture <span class="muted small">Wireshark-style, from the relays — auto-refresh 3s</span>
+    <a class="btn small" href="{{ url_for('tools.pcap') }}">&#11015; Download .pcap (open in Wireshark)</a>
+  </h2>
+  <table class="table" id="pkt-table">
+    <thead><tr><th>Time</th><th>Device</th><th>Src</th><th>Dst</th><th>Proto</th><th>Len</th><th>Info</th></tr></thead>
+    <tbody>
+    {% for p in packets %}
+    <tr><td class="mono small">{{ p.ts }}</td><td>{{ p.device }}</td>
+      <td class="mono">{{ p.src }}</td><td class="mono">{{ p.dst }}</td>
+      <td>{{ p.proto }}</td><td class="num">{{ p.len }}</td>
+      <td class="small">{{ p.info }}</td></tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">No packets yet — start a DNS capture or block on a device.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Traffic matrix <span class="muted small">who talks to whom</span></h2>
+    <table class="table">
+      <thead><tr><th>Device</th><th>Server</th><th>Port</th><th>Packets</th></tr></thead>
+      <tbody>
+      {% for r in matrix[:25] %}
+      <tr><td>{{ r.device }}</td><td class="mono">{{ r.server_ip }}</td>
+        <td class="num">{{ r.port }}</td><td class="num">{{ r.count }}</td></tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">No sessions active.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Today's DNS heatmap <span class="muted small">device × hour</span></h2>
+    {% set hours = range(0, 24) %}
+    <table class="table">
+      <thead><tr><th>Device</th>{% for h in hours %}<th class="num">{{ h }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% set devs = heat|map(attribute='name')|unique|list %}
+      {% for dname in devs %}
+      <tr><td>{{ dname }}</td>
+        {% for h in hours %}
+        {% set c = heat|selectattr('name','equalto',dname)|selectattr('hour','equalto',h)|list %}
+        <td class="num">{{ c[0].count if c else '' }}</td>
+        {% endfor %}
+      </tr>
+      {% else %}
+      <tr><td colspan="25" class="muted">No DNS today.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Traceroute <span class="muted small">tracert on Windows</span></h2>
+    <form id="tr-form" class="inline-form">
+      <select name="mac">
+        {% for d in devices %}<option value="{{ d.mac }}">{{ d.display_name }}</option>{% endfor %}
+        <option value="">Custom IP</option>
+      </select>
+      <input type="text" name="ip" placeholder="or IP directly">
+      <button class="btn small" type="submit">Traceroute</button>
+    </form>
+    <pre id="tr-out" class="tool-out">Results appear here…</pre>
+  </div>
+
+  <div class="card">
+    <h2>Interfaces &amp; routes <span class="muted small">ifconfig / route</span></h2>
+    <table class="table">
+      <thead><tr><th>Interface</th><th>IP</th><th>Netmask</th><th>MAC</th></tr></thead>
+      <tbody>
+      {% for i in ifaces %}
+      <tr><td class="mono">{{ i.name }}</td><td class="mono">{{ i.ip or '—' }}</td>
+        <td class="mono">{{ i.netmask or '—' }}</td><td class="mono">{{ i.mac }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">Default routes: {% for r in routes %}<span class="mono">{{ r.gateway }} ({{ r.iface or 'auto' }})</span>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  // dig
+  document.getElementById("dig-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var f = e.target;
+    var body = new FormData(f);
+    fetch("/tools/dig", {method: "POST", body: body})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var out = document.getElementById("dig-out");
+        if (d.error) { out.textContent = "error: " + d.error; return; }
+        var lines = [";; " + d.domain + " via " + d.resolver + " (flags " + d.flags + ")",
+                     ";; ANSWERS:"];
+        (d.answers || []).forEach(function (a) {
+          lines.push(a.type + "\t" + a.value);
+        });
+        if (!(d.answers || []).length) lines.push("(no answers)");
+        out.textContent = lines.join("\n");
+      });
+  });
+  // rdap
+  document.getElementById("rdap-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var body = new FormData(e.target);
+    fetch("/tools/rdap", {method: "POST", body: body})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var out = document.getElementById("rdap-out");
+        if (d.error) { out.textContent = d.error; return; }
+        out.textContent = JSON.stringify(d, null, 2);
+      });
+  });
+  // traceroute
+  document.getElementById("tr-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var body = new FormData(e.target);
+    fetch("/tools/traceroute", {method: "POST", body: body})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var out = document.getElementById("tr-out");
+        if (d.error) { out.textContent = d.error; return; }
+        var lines = ["traceroute to " + d.ip];
+        (d.hops || []).forEach(function (h) {
+          lines.push("  " + h.hop + "  " + (h.ip || "*") + "  " + (h.rtt_ms != null ? h.rtt_ms + " ms" : "*"));
+        });
+        if (!(d.hops || []).length) lines.push("(no hops — tool unavailable?)");
+        out.textContent = lines.join("\n");
+      });
+  });
+  // live packet table
+  function refreshPackets() {
+    fetch("/tools/api/packets", {headers: {"Accept": "application/json"}})
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        var tb = document.querySelector("#pkt-table tbody");
+        if (!tb) return;
+        var html = "";
+        rows.slice(-50).reverse().forEach(function (p) {
+          html += '<tr><td class="mono small">' + p.ts + '</td><td>' + p.device + '</td>' +
+                  '<td class="mono">' + p.src + '</td><td class="mono">' + p.dst + '</td>' +
+                  '<td>' + p.proto + '</td><td class="num">' + p.len + '</td>' +
+                  '<td class="small">' + (p.info || "") + '</td></tr>';
+        });
+        if (!rows.length) {
+          html = '<tr><td colspan="7" class="muted">No packets yet.</td></tr>';
+        }
+        tb.innerHTML = html;
+      })
+      .catch(function () {});
+  }
+  refreshPackets();
+  setInterval(refreshPackets, 3000);
+})();
+</script>
+{% endblock %}

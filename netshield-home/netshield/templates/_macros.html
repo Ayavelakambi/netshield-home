@@ -1,0 +1,41 @@
+{# Shared SVG chart macros — no external charting library needed. #}
+
+{% macro bw_bars(series, label, height=170) %}
+{# series: list of {day, up, down} or {week, up, down} #}
+{% set maxv = [1] %}
+{% for s in series %}
+  {% if s.up + s.down > maxv[0] %}{% if maxv.append(s.up + s.down) %}{% endif %}{% endif %}
+{% endfor %}
+{% set m = maxv[0] %}
+{% set bw = 10 %}
+{% set gap = 22 %}
+{% set w = series|length * gap %}
+<svg viewBox="0 0 {{ w + 20 }} {{ height }}" class="chart" role="img" aria-label="{{ label }}">
+  <line x1="10" y1="10" x2="10" y2="{{ height - 34 }}" stroke="#334155" stroke-width="1"/>
+  <line x1="10" y1="{{ height - 34 }}" x2="{{ w + 10 }}" y2="{{ height - 34 }}" stroke="#334155" stroke-width="1"/>
+  {% for s in series %}
+    {% set x = 10 + loop.index0 * gap %}
+    {% set h_up = (s.up / m) * (height - 60) %}
+    {% set h_down = (s.down / m) * (height - 60) %}
+    {% if s.up or s.down %}
+      <rect x="{{ x }}" y="{{ height - 34 - h_up }}" width="{{ bw }}" height="{{ h_up if h_up > 1 else 1 }}" fill="#38bdf8" rx="2"/>
+      <rect x="{{ x + bw + 2 }}" y="{{ height - 34 - h_down }}" width="{{ bw }}" height="{{ h_down if h_down > 1 else 1 }}" fill="#a78bfa" rx="2"/>
+    {% endif %}
+    <text x="{{ x + bw }}" y="{{ height - 16 }}" text-anchor="middle" font-size="8" fill="#94a3b8">{{ (s.day or s.week)[-5:] }}</text>
+  {% endfor %}
+  <rect x="{{ w - 40 }}" y="12" width="9" height="9" fill="#38bdf8"/><text x="{{ w - 28 }}" y="21" font-size="9" fill="#cbd5e1">up</text>
+  <rect x="{{ w - 40 }}" y="26" width="9" height="9" fill="#a78bfa"/><text x="{{ w - 28 }}" y="35" font-size="9" fill="#cbd5e1">down</text>
+</svg>
+{% endmacro %}
+
+{% macro risk_chip(level) %}
+<span class="chip risk-{{ level|lower }}">{{ level }}</span>
+{% endmacro %}
+
+{% macro sev_chip(severity) %}
+<span class="chip sev-{{ severity }}">{{ severity }}</span>
+{% endmacro %}
+
+{% macro cat_badges(categories) %}
+{% for c in categories %}<span class="cat-badge">{{ category_labels.get(c, c) }}</span>{% endfor %}
+{% endmacro %}

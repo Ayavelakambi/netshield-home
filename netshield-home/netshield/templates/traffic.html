@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% from "_macros.html" import cat_badges with context %}
+{% block title %}Traffic / History — NetShield Home{% endblock %}
+{% block content %}
+<h1>Traffic &amp; History</h1>
+
+<div class="card">
+  <h2>DNS capture <span class="muted small">live status — queries seen &amp; domains logged</span></h2>
+  <div id="dns-status-box">
+    <span class="chip {{ 'ok' if dns_status.running else 'bad' }}">{{ 'capturing' if dns_status.running else 'stopped' }}</span>
+    <span class="chip {{ 'warn' if dns_status.mode == 'full-relay' else 'ok' }}">{{ 'FULL — ARP relay' if dns_status.mode == 'full-relay' else 'passive' }}</span>
+    <span class="muted">queries seen: <strong id="dns-queries">{{ dns_status.queries_seen }}</strong></span>
+    <span class="muted">domains in DB: <strong id="dns-domains">{{ dns_status.domains_in_db }}</strong></span>
+    <span class="muted">history rows: <strong id="dns-rows">{{ dns_status.rows_in_db }}</strong></span>
+    {% if dns_status.relayed_devices %}<span class="muted">devices relayed: <strong>{{ dns_status.relayed_devices }}</strong></span>{% endif %}
+    {% if dns_status.ineffective %}<span class="bad-text">{{ dns_status.ineffective }} session(s) not seeing traffic</span>{% endif %}
+    {% if dns_status.last_error %}<span class="bad-text">last error: {{ dns_status.last_error }}</span>{% endif %}
+    {% if dns_status.started_at %}<span class="muted small">since {{ dns_status.started_at[:16].replace('T', ' ') }} UTC</span>{% endif %}
+  </div>
+  {% if dns_status.mode == 'full-relay' %}
+  <div class="banner warning small">Full DNS capture is ON — every device is
+    ARP-spoofed and relayed through this host so their DNS is recorded.
+    Keep this machine running; ARP is restored on exit.</div>
+  {% else %}
+  <p class="muted small">Passive mode — only DNS crossing this interface is
+    seen. Enable <strong>full capture</strong> (Settings → DNS history
+    capture) to record every device's domains via ARP relay.</p>
+  {% endif %}
+  <p class="muted small">Domain history shows which domains devices queried,
+    not search terms or page content (those are inside encrypted HTTPS).
+    Queries appear here within about a minute of capture. The admin PC's own
+    traffic is never recorded, and reverse-DNS lookups / connectivity checks
+    are filtered out automatically.</p>
+</div>
+
+<div class="card">
+  <h2>Active control sessions</h2>
+  {% if sessions %}
+  <table class="table">
+    <thead><tr><th>Device</th><th>State</th><th>Speed limit</th>
+      <th>Blocking</th><th>DNS allowlist</th>
+      <th>Seen / Fwd / Drop</th><th>DNS logged / blocked</th><th></th></tr></thead>
+    <tbody>
+    {% for s in sessions %}
+    <tr data-control-state="{{ s.mac }}">
+      <td>{{ device_names.get(s.mac, s.mac) }} <div class="mono small">{{ s.mac }}</div></td>
+      <td><span class="chip ctl-{{ 'cut' if s.cut else 'throttled' if s.speed_limit_kbps else 'block' }}" data-control-state-chip="{{ s.mac }}">{{ 'cut' if s.cut else 'throttled' if s.speed_limit_kbps else 'blocked' }}</span></td>
+      <td>{{ s.speed_limit_kbps ~ ' kbps' if s.speed_limit_kbps else '—' }}</td>
+      <td class="small">
+        {% if s.blocked_categories %}
+          {% for label in s.blocked_categories %}<span class="cat-badge">{{ label }}</span>{% endfor %}
+        {% elif s.monitor %}
+          <span class="muted">capture only</span>
+        {% else %}
+          <span class="muted">none</span>
+        {% endif %}
+      </td>
+      <td>{{ 'on' if s.dns_allowlist is not none else '—' }}</td>
+      <td class="mono">{{ s.stats.pkts_seen }} / {{ s.stats.pkts_forwarded }} / {{ s.stats.pkts_dropped }}</td>
+      <td class="num">{{ s.stats.dns_logged }} / {{ s.stats.dns_blocked }}</td>
+      <td>
+        {% if current_user.is_admin %}
+        <form method="post" action="{{ url_for('traffic.control', mac=s.mac, action='restore') }}">
+          <button class="btn small" type="submit">Restore</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No active control sessions. Cut / throttle / category
+    blocking is applied from a device page or via schedule rules below.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Schedule rules <span class="muted small">"bedtime mode" — evaluated once a minute</span></h2>
+  {% if current_user.is_admin %}
+  <details class="collapsible">
+    <summary>+ New rule</summary>
+    <form method="post" action="{{ url_for('traffic.create_rule') }}" class="form-grid">
+      <label>Name <input type="text" name="name" required></label>
+      <label>Target type
+        <select name="target_type" id="rule-target-type">
+          <option value="device">Device</option>
+          <option value="group">Group</option>
+        </select>
+      </label>
+      <label>Target
+        <select name="target_id" id="rule-target-id">
+          {% for d in devices %}<option value="{{ d.mac }}">{{ d.nickname or d.display_name }}</option>{% endfor %}
+          {% for g in groups %}<option value="{{ g.id }}">{{ g.name }} (group)</option>{% endfor %}
+        </select>
+      </label>
+      <label>Start <input type="time" name="start_time" value="22:00" required></label>
+      <label>End <input type="time" name="end_time" value="06:00" required></label>
+      <div class="field">
+        <span class="field-label">Days of week (none = every day)</span>
+        {% set days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"] %}
+        {% for i in range(7) %}
+        <label class="check"><input type="checkbox" name="days" value="{{ i }}"> {{ days[i] }}</label>
+        {% endfor %}
+      </div>
+      <div class="field">
+        <span class="field-label">Mode</span>
+        <label class="check"><input type="radio" name="mode" value="block_categories" checked> Block specific categories</label>
+        <label class="check"><input type="radio" name="mode" value="block_all_except_allowlist"> Block everything except allowlist</label>
+      </div>
+      <div class="field">
+        <span class="field-label">Blocked categories (for category mode)</span>
+        {% for cname, cat in categories.items() %}
+        <label class="check"><input type="checkbox" name="categories" value="{{ cname }}"> {{ cat.label }}</label>
+        {% endfor %}
+      </div>
+      <label>Allowlist domains (one per line, for allowlist mode)
+        <textarea name="allowlist" rows="4" placeholder="school-portal.example.com&#10;homework.example.org"></textarea>
+      </label>
+      <button class="btn primary" type="submit">Create rule</button>
+    </form>
+  </details>
+  {% endif %}
+  {% if rules %}
+  <table class="table">
+    <thead><tr><th>Name</th><th>Target</th><th>Window</th><th>Days</th>
+      <th>Mode</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rules %}
+    <tr class="{{ '' if r.active else 'dim' }}">
+      <td><strong>{{ r.name }}</strong></td>
+      <td>{{ device_names.get(r.target_id, r.target_id) if r.target_type == 'device' else groups_names.get(r.target_id, r.target_id) }}</td>
+      <td>{{ r.start_time }} – {{ r.end_time }}</td>
+      <td>{{ r.days_of_week|weekdays }}</td>
+      <td class="small">
+        {{ 'Block all except allowlist' if r.mode == 'block_all_except_allowlist' else 'Block categories' }}
+        {% if r.mode == 'block_categories' %}{{ cat_badges(r.blocked_categories or []) }}{% endif %}
+      </td>
+      <td>
+        {% if current_user.is_admin %}
+        <form method="post" action="{{ url_for('traffic.toggle_rule', rule_id=r.id) }}" class="inline">
+          <button class="btn small" type="submit">{{ 'Disable' if r.active else 'Enable' }}</button>
+        </form>
+        <form method="post" action="{{ url_for('traffic.delete_rule', rule_id=r.id) }}" class="inline">
+          <button class="btn small danger" type="submit" onclick="return confirm('Delete rule {{ r.name }}?')">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No schedule rules yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Top domains
+    <span class="range-tabs">
+      {% for label, val in [("Today", 1), ("7 days", 7), ("30 days", 30)] %}
+      <a class="{{ 'active' if range_days == val }}" href="?range={{ val }}{% if dev_filter %}&device={{ dev_filter }}{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </span>
+  </h2>
+  <form method="get" class="inline-form">
+    <input type="hidden" name="range" value="{{ range_days }}">
+    <label class="small">Filter by device
+      <select name="device" onchange="this.form.submit()">
+        <option value="">All devices</option>
+        {% for d in devices %}
+        <option value="{{ d.mac }}" {{ 'selected' if dev_filter == d.mac }}>{{ d.nickname or d.display_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% if top %}
+  <table class="table">
+    <thead><tr><th>#</th><th>Domain</th><th>Queries</th><th>Categories</th></tr></thead>
+    <tbody>
+    {% for d in top %}
+    <tr>
+      <td class="num">{{ loop.index }}</td>
+      <td class="mono">{{ d.domain }}</td>
+      <td class="num">{{ d.count }}</td>
+      <td>{{ cat_badges(d.categories) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No DNS data for this range yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Full history
+    <a class="btn small" href="{{ url_for('traffic.export_history', q=q, device=dev_filter or '') }}">Export CSV</a>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('traffic.clear_history') }}" class="inline"
+          onsubmit="return confirm('Clear ALL device history? This cannot be undone.')">
+      <button class="btn small danger" type="submit">Clear all history</button>
+    </form>
+    {% endif %}
+  </h2>
+  <div class="banner info small">{{ scope_note }}</div>
+  <form method="get" class="inline-form">
+    <input type="hidden" name="range" value="{{ range_days }}">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search domain…">
+    <select name="device" onchange="this.form.submit()">
+      <option value="">All devices</option>
+      {% for d in devices %}
+      <option value="{{ d.mac }}" {{ 'selected' if dev_filter == d.mac }}>{{ d.nickname or d.display_name }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn small" type="submit">Filter</button>
+    {% if q or dev_filter %}<a class="btn small" href="{{ url_for('traffic.index') }}">Clear</a>{% endif %}
+  </form>
+  <table class="table">
+    <thead><tr><th>Domain</th><th>Device</th><th>First seen</th><th>Last seen</th><th>Count</th></tr></thead>
+    <tbody>
+    {% for row in hist.items %}
+    <tr>
+      <td class="mono">{{ row.domain }}</td>
+      <td>
+        {% if row.device_mac %}
+        <a href="{{ url_for('devices.detail', mac=row.device_mac) }}">{{ device_names.get(row.device_mac, row.device_mac) }}</a>
+        <div class="mono small">{{ row.device_mac }}</div>
+        {% else %}<span class="muted">unknown</span>{% endif %}
+      </td>
+      <td>{{ row.first_seen|localtime }}</td>
+      <td>{{ row.last_seen|localtime }}</td>
+      <td class="num">{{ row.total }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">No matching rows.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if hist.pages > 1 %}
+  <div class="pagination">
+    {% if hist.has_prev %}<a class="btn small" href="?page={{ hist.prev_num }}{% if q %}&q={{ q }}{% endif %}{% if dev_filter %}&device={{ dev_filter }}{% endif %}">&larr; prev</a>{% endif %}
+    <span class="muted small">page {{ hist.page }} / {{ hist.pages }}</span>
+    {% if hist.has_next %}<a class="btn small" href="?page={{ hist.next_num }}{% if q %}&q={{ q }}{% endif %}{% if dev_filter %}&device={{ dev_filter }}{% endif %}">next &rarr;</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// refresh the DNS capture status box every 10s
+(function () {
+  function refreshDnsStatus() {
+    fetch("/traffic/api/dns-status", {headers: {"Accept": "application/json"}})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var q = document.getElementById("dns-queries");
+        var dm = document.getElementById("dns-domains");
+        var rw = document.getElementById("dns-rows");
+        if (q) q.textContent = d.queries_seen;
+        if (dm) dm.textContent = d.domains_in_db;
+        if (rw) rw.textContent = d.rows_in_db;
+      })
+      .catch(function () {});
+  }
+  setInterval(refreshDnsStatus, 10000);
+})();
+</script>
+{% endblock %}

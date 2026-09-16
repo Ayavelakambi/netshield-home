@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% from "_macros.html" import cat_badges with context %}
+{% block title %}WiFi — NetShield Home{% endblock %}
+{% block content %}
+<h1>WiFi</h1>
+
+<div class="card">
+  <h2>WiFi gateway <span class="muted small">your router — never scanned, never controlled</span></h2>
+  <table class="kv">
+    <tr><th>IP</th><td class="mono"><strong>{{ gateway_info.ip }}</strong>
+      {% if gateway_info.is_wifi %}<span class="chip ok">Wi-Fi gateway</span>{% endif %}</td></tr>
+    <tr><th>MAC</th><td class="mono">{{ gateway_info.mac or 'not resolved yet' }}</td></tr>
+    <tr><th>Vendor</th><td>{{ gateway_info.vendor or '—' }}</td></tr>
+    <tr><th>Interface</th><td class="mono">{{ gateway_info.iface or 'auto' }}</td></tr>
+    <tr><th>Source</th><td class="mono">{{ gateway_info.source }}</td></tr>
+  </table>
+  <p class="muted small">Traffic passes through this gateway to reach the
+    internet ("outside the Wi-Fi"). NetShield sees everything inside the
+    network (devices via ARP) and everything going outside (domains via DNS
+    sniffing), and can cut / throttle / category-block any device's
+    outbound traffic — the gateway itself is protected by the safety gate.</p>
+</div>
+
+<div class="toolbar">
+  {% if current_user.is_admin %}
+  <form method="post" action="{{ url_for('wifi.scan') }}">
+    <button class="btn" type="submit">&#8635; Scan now</button>
+  </form>
+  {% endif %}
+  <p class="muted small">Scanned via OS tooling (netsh on Windows, nmcli on
+    Linux). One row per BSSID — multiple APs broadcasting the same SSID stay
+    individually visible.</p>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Wireless IDS findings</h2>
+    {% if findings %}
+    {% for f in findings %}
+    <div class="panel risk-border-{{ 'high' if f.severity == 'high' else 'medium' }}">
+      <div class="panel-head">
+        <span class="chip sev-{{ f.severity }}">{{ f.severity }}</span>
+        <strong class="mono">{{ f.type }}</strong>
+      </div>
+      <p class="small">{{ f.message }}</p>
+      <p class="muted small">De-duplicated — this finding will not re-fire on
+        every scan cycle while it stays active.</p>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="muted">No evil-twin or insecure-network findings right now.
+      (Run a scan to refresh.)</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>RF channel recommendations</h2>
+    {% for band, rec in recs.recommendations.items() %}
+    <div class="rec-box">
+      <div class="rec-band">{{ band }} GHz</div>
+      <div class="rec-channel">Channel <strong>{{ rec.channel }}</strong>
+        <span class="muted small">(congestion score {{ rec.score }})</span></div>
+      <p class="muted small">{{ rec.note }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Observed networks <span class="muted small">one row per BSSID</span></h2>
+  {% if networks %}
+  <table class="table">
+    <thead><tr><th>SSID</th><th>BSSID</th><th>Vendor</th><th>Channel</th><th>Band</th>
+      <th>Signal</th><th>Encryption</th><th>Last seen</th></tr></thead>
+    <tbody>
+    {% for n in networks %}
+    <tr class="{{ 'bad-row' if n.encryption in ('Open', 'WEP') }}">
+      <td><strong>{{ n.ssid or '(hidden)' }}</strong></td>
+      <td class="mono">{{ n.bssid }}</td>
+      <td>{{ ap_vendors.get(n.bssid, '—') }}</td>
+      <td class="num">{{ n.channel or '—' }}</td>
+      <td>{{ n.band }}</td>
+      <td>
+        <div class="sig"><div class="sig-fill" style="width: {{ n.signal_strength or 0 }}%"></div></div>
+        {{ n.signal_strength or '—' }}%
+      </td>
+      <td><span class="chip {{ 'bad' if n.encryption in ('Open', 'WEP') else 'ok' }}">{{ n.encryption or '—' }}</span></td>
+      <td>{{ n.last_seen|localtime }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No networks recorded yet — WiFi scanning may be
+    unsupported on this platform (netsh is used on Windows, nmcli on Linux).
+    The rest of NetShield Home keeps working.</p>
+  {% endif %}
+</div>
+{% endblock %}

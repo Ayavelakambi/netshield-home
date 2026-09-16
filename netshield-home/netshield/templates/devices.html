@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}Devices — NetShield Home{% endblock %}
+{% block content %}
+<h1>Devices <span class="muted small">{{ devices|length }} total</span></h1>
+
+<div class="toolbar">
+  <form method="post" action="{{ url_for('devices.refresh') }}">
+    <button class="btn" type="submit">&#8635; Scan now</button>
+  </form>
+  {% if current_user.is_admin %}
+  <form method="post" action="{{ url_for('devices.cut_all') }}"
+        onsubmit="return confirm('Cut {{ cut_count }} device(s) off the network?')">
+    <button class="btn danger" type="submit">&#128683; Cut all{% if cut_count %} ({{ cut_count }}){% endif %}</button>
+  </form>
+  <form method="post" action="{{ url_for('devices.restore_all') }}">
+    <button class="btn" type="submit">&#8634; Restore all{% if cut_count %} ({{ cut_count }}){% endif %}</button>
+  </form>
+  {% endif %}
+  <p class="muted small">Discovery merges three methods: ARP broadcast
+    (Scapy, on the gateway-routed interface) + OS neighbour table +
+    ping sweep. Registry is keyed by MAC, so identity survives DHCP
+    re-leases. Join/leave events push live via Socket.IO. Cuts persist:
+    a device that reconnects is cut again automatically.</p>
+</div>
+
+{% if current_user.is_admin and last_report %}
+<div class="muted small" style="margin-bottom:12px">
+  <strong>Last detection report:</strong>
+  network {{ last_report.network }} &middot; gateway
+  {{ last_report.gateway.ip if last_report.gateway else '?' }}
+  {% if last_report.gateway and last_report.gateway.mac %}({{ last_report.gateway.mac }}){% endif %}
+  &middot; ARP broadcast {{ last_report.arp_broadcast }} &middot; neighbour table
+  {{ last_report.neighbor_table }} &middot; ping sweep {{ last_report.ping_sweep }}
+  &middot; unique hosts {{ last_report.unique }} &middot; interface
+  {{ last_report.iface or 'auto' }} &middot; {{ last_report.elapsed_s }}s
+  (skipped: {{ last_report.skipped.gateway }} gateway,
+  {{ last_report.skipped.self }} self, {{ last_report.skipped.bad_mac }} bad MAC)
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Topology
+    <span class="range-tabs">
+      <a href="#" id="topo-zoom-in">&#10133; zoom in</a>
+      <a href="#" id="topo-zoom-out">&#10134; zoom out</a>
+      <a href="#" id="topo-reset">reset</a>
+    </span>
+  </h2>
+  <div id="topo-wrap">{{ topology|safe }}</div>
+  <div id="topo-tip" class="topo-tip" style="display:none"></div>
+</div>
+
+<div class="card">
+  <h2>Device registry</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Device</th><th>IP</th><th>Vendor</th><th>OS guess</th>
+        <th>Last seen</th><th>Group</th><th>Control</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for d in devices %}
+    <tr data-control-state="{{ d.mac }}" class="{{ 'row-cut' if d.control_state == 'cut' else '' }} {{ '' if d.is_online else 'dim' }}">
+      <td data-mac="{{ d.mac }}">
+        <a href="{{ url_for('devices.detail', mac=d.mac) }}">
+          <strong class="dev-name">{{ d.nickname or d.hostname or d.current_ip or d.mac }}</strong></a>
+        <div class="mono small">{{ d.current_ip }} &middot; {{ d.mac }}</div>
+        {% if d.is_private_mac %}<span class="cat-badge warn">randomised MAC</span>{% endif %}
+      </td>
+      <td class="mono">{{ d.current_ip }}</td>
+      <td>{{ d.vendor or '—' }}</td>
+      <td>{{ d.os_guess or '—' }}</td>
+      <td>{{ d.last_seen|localtime }}<br>
+        <span class="chip {{ 'ok' if d.is_online else 'dim' }}">{{ 'online' if d.is_online else 'offline' }}</span>
+      </td>
+      <td>{{ d.group.name if d.group else '—' }}</td>
+      <td>
+        {% set s = sessions.get(d.mac) %}
+        <span class="chip ctl-{{ d.control_state }}" data-control-state-chip="{{ d.mac }}">{{ d.control_state }}</span>
+        {% if s and s.monitor %}<div class="small muted">DNS capture via ARP relay</div>{% endif %}
+        {% if s and s.effective == 'ineffective' %}<div class="small bad-text">not seeing traffic</div>{% endif %}
+        {% if s and s.dns_allowlist is not none %}<div class="small muted">allowlist mode</div>{% endif %}
+        {% if s and s.blocked_categories %}
+        <div class="small muted">blocking: {% for label in s.blocked_categories %}{{ label }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+        {% endif %}
+      </td>
+      <td>
+        <a class="btn small" href="{{ url_for('devices.detail', mac=d.mac) }}">Details</a>
+        {% if current_user.is_admin %}
+        {% if d.control_state == 'cut' %}
+        <form method="post" action="{{ url_for('devices.controls', mac=d.mac) }}" class="inline">
+          <input type="hidden" name="action" value="restore">
+          <button class="btn small" type="submit">Restore</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('devices.controls', mac=d.mac) }}" class="inline">
+          <input type="hidden" name="action" value="cut">
+          <button class="btn small danger" type="submit" {{ 'disabled' if not packet_capable and not d.control_state }} title="Cut off internet (one click, NetCut-style)">Cut</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">No devices discovered yet. Run a scan or
+      wait for the poller.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Groups <span class="muted small">shared default rules apply to every member</span></h2>
+  {% set days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"] %}
+  {% if current_user.is_admin %}
+  <details class="collapsible">
+    <summary>+ New group</summary>
+    <form method="post" action="{{ url_for('devices.create_group') }}" class="form-grid">
+      <label>Name <input type="text" name="name" required></label>
+      <label>Default speed limit (kbps) <input type="number" name="kbps" min="16" placeholder="none"></label>
+      <label>Bedtime start <input type="time" name="bedtime_start"></label>
+      <label>Bedtime end <input type="time" name="bedtime_end"></label>
+      <div class="field">
+        <span class="field-label">Default blocked categories</span>
+        {% for cname, cat in categories.items() if cat.editable %}
+        <label class="check"><input type="checkbox" name="categories" value="{{ cname }}"> {{ cat.label }}</label>
+        {% endfor %}
+      </div>
+      <div class="field">
+        <span class="field-label">Bedtime days</span>
+        {% for i in range(7) %}
+        <label class="check"><input type="checkbox" name="days" value="{{ i }}"> {{ days[i] }}</label>
+        {% endfor %}
+      </div>
+      <button class="btn primary" type="submit">Create group</button>
+    </form>
+  </details>
+  {% endif %}
+  <table class="table">
+    <thead><tr><th>Name</th><th>Default blocked categories</th><th>Speed limit</th><th>Bedtime</th><th>Members</th><th></th></tr></thead>
+    <tbody>
+    {% for g in groups %}
+    <tr>
+      <td><strong>{{ g.name }}</strong></td>
+      <td>{% for c in g.default_blocked_categories %}<span class="cat-badge">{{ category_labels.get(c, c) }}</span>{% endfor %}</td>
+      <td>{{ g.default_speed_limit_kbps ~ ' kbps' if g.default_speed_limit_kbps else '—' }}</td>
+      <td>{{ g.bedtime_start ~ ' – ' ~ g.bedtime_end if g.bedtime_start else '—' }}</td>
+      <td>{{ g.devices|length }}</td>
+      <td>
+        {% if current_user.is_admin %}
+        <details class="collapsible inline">
+          <summary>Edit</summary>
+          <form method="post" action="{{ url_for('devices.update_group', group_id=g.id) }}" class="form-grid">
+            <label>Name <input type="text" name="name" value="{{ g.name }}" required></label>
+            <label>Speed limit (kbps) <input type="number" name="kbps" min="16" value="{{ g.default_speed_limit_kbps or '' }}"></label>
+            <label>Bedtime start <input type="time" name="bedtime_start" value="{{ g.bedtime_start or '' }}"></label>
+            <label>Bedtime end <input type="time" name="bedtime_end" value="{{ g.bedtime_end or '' }}"></label>
+            <div class="field">
+              <span class="field-label">Default blocked categories</span>
+              {% for cname, cat in categories.items() if cat.editable %}
+              <label class="check"><input type="checkbox" name="categories" value="{{ cname }}" {{ 'checked' if cname in g.default_blocked_categories }}> {{ cat.label }}</label>
+              {% endfor %}
+            </div>
+            <div class="field">
+              <span class="field-label">Bedtime days</span>
+              {% for i in range(7) %}
+              <label class="check"><input type="checkbox" name="days" value="{{ i }}" {{ 'checked' if i in g.bedtime_days }}> {{ days[i] }}</label>
+              {% endfor %}
+            </div>
+            <button class="btn primary" type="submit">Save</button>
+            <button class="btn danger" formaction="{{ url_for('devices.delete_group', group_id=g.id) }}" formmethod="post" type="submit" onclick="return confirm('Delete group {{ g.name }}? Members will be ungrouped.')">Delete</button>
+          </form>
+        </details>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+// Interactive topology: drag nodes, zoom, double-click to open, hover tooltip
+(function () {
+  var svg = document.getElementById("topo");
+  if (!svg) return;
+  var base = [0, 0, 900, 460], view = base.slice(), scale = 1;
+  var tip = document.getElementById("topo-tip");
+
+  function applyView() {
+    svg.setAttribute("viewBox", view.join(" "));
+  }
+  function zoomAt(f, cx, cy) {
+    var nx = scale * f;
+    if (nx < 0.3 || nx > 4) return;
+    scale = nx;
+    var mx = (cx == null) ? (view[2] / 2) : cx;
+    var my = (cy == null) ? (view[3] / 2) : cy;
+    var wx = view[0] + mx / (view[2] / (base[2] * scale / base[2]) / 1);
+    // simpler: zoom centered on current view center
+    var vw = base[2] / scale, vh = base[3] / scale;
+    var cxv = view[0] + (mx - view[0]) * (vw / view[2]);
+    var cyv = view[1] + (my - view[1]) * (vh / view[3]);
+    view = [cxv - vw / 2, cyv - vh / 2, vw, vh];
+    applyView();
+  }
+  function zoomCenter(f) { zoomAt(f); }
+  document.getElementById("topo-zoom-in").addEventListener("click", function (e) { e.preventDefault(); zoomCenter(1.3); });
+  document.getElementById("topo-zoom-out").addEventListener("click", function (e) { e.preventDefault(); zoomCenter(1 / 1.3); });
+  document.getElementById("topo-reset").addEventListener("click", function (e) { e.preventDefault(); view = base.slice(); scale = 1; applyView(); });
+
+  svg.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var r = svg.getBoundingClientRect();
+    zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  // pan by dragging the background
+  var pan = null;
+  svg.addEventListener("pointerdown", function (e) {
+    if (e.target.closest(".topo-node")) return;
+    pan = { x: e.clientX, y: e.clientY, v0: view.slice() };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", function (e) {
+    if (!pan) return;
+    var r = svg.getBoundingClientRect();
+    var dx = (e.clientX - pan.x) * (view[2] / r.width);
+    var dy = (e.clientY - pan.y) * (view[3] / r.height);
+    view = [pan.v0[0] - dx, pan.v0[1] - dy, pan.v0[2], pan.v0[3]];
+    applyView();
+  });
+  svg.addEventListener("pointerup", function () { pan = null; });
+
+  // drag individual nodes (edges follow)
+  var drag = null;
+  function nodeCenter(g) {
+    var c = g.querySelector("circle");
+    return { x: parseFloat(c.getAttribute("cx")), y: parseFloat(c.getAttribute("cy")) };
+  }
+  function setNodePos(g, x, y) {
+    var c = g.querySelector("circle"), t = g.querySelector("text"),
+        mac = g.getAttribute("data-mac");
+    c.setAttribute("cx", x); c.setAttribute("cy", y);
+    t.setAttribute("x", x); t.setAttribute("y", y + 3);
+    var edge = document.getElementById("edge-" + mac);
+    if (edge) { edge.setAttribute("x2", x); edge.setAttribute("y2", y); }
+  }
+  svg.querySelectorAll(".topo-node").forEach(function (g) {
+    g.addEventListener("pointerdown", function (e) {
+      e.stopPropagation();
+      var r = svg.getBoundingClientRect();
+      var c = nodeCenter(g);
+      drag = { g: g, ox: e.clientX, oy: e.clientY, cx: c.x, cy: c.y,
+               sx: (e.clientX - r.left) * (view[2] / r.width) + view[0],
+               sy: (e.clientY - r.top) * (view[3] / r.height) + view[1] };
+      svg.setPointerCapture(e.pointerId);
+    });
+    g.addEventListener("dblclick", function () {
+      window.location = "/devices/" + g.getAttribute("data-mac");
+    });
+    g.addEventListener("pointerenter", function (e) {
+      var name = g.getAttribute("data-name") || g.getAttribute("data-mac");
+      var ip = g.getAttribute("data-ip"), vendor = g.getAttribute("data-vendor");
+      var state = g.getAttribute("data-state");
+      tip.innerHTML = "<strong>" + name + "</strong> " + ip +
+        (vendor ? " &middot; " + vendor : "") +
+        " &middot; " + state + (g.getAttribute("data-online") === "1" ? " &middot; online" : " &middot; offline") +
+        " &middot; double-click to open";
+      tip.style.display = "block";
+    });
+    g.addEventListener("pointerleave", function () { tip.style.display = "none"; });
+  });
+  svg.addEventListener("pointermove", function (e) {
+    if (!drag) return;
+    var r = svg.getBoundingClientRect();
+    var nx = drag.sx + (e.clientX - drag.ox) * (view[2] / r.width);
+    var ny = drag.sy + (e.clientY - drag.oy) * (view[3] / r.height);
+    setNodePos(drag.g, nx, ny);
+  });
+  svg.addEventListener("pointerup", function () { drag = null; });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+{% block title %}Settings — NetShield Home{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<div class="card">
+  <h2>Privileges &amp; access <span class="muted small">the scanning host must be admin to do everything</span></h2>
+  <table class="kv">
+    <tr><th>Privileges</th><td>
+      <span class="chip {{ 'ok' if priv.elevated else 'bad' }}">
+        {{ 'ADMINISTRATOR / root' if priv.elevated else 'NOT elevated' }}</span>
+      {% if not priv.elevated and priv.windows %}
+      <form method="post" action="{{ url_for('settings.relaunch_admin') }}" style="display:inline; margin-left:8px">
+        <button class="btn small" type="submit">Restart as Administrator</button>
+      </form>
+      {% endif %}
+    </td></tr>
+    <tr><th>Npcap (Windows)</th><td>
+      {% if priv.npcap is none %}<span class="muted">not applicable</span>
+      {% elif priv.npcap %}<span class="chip ok">installed</span>
+      {% else %}<span class="chip bad">NOT installed</span>
+        <a href="https://npcap.com" target="_blank" rel="noopener">install from npcap.com</a>
+      {% endif %}
+    </td></tr>
+    <tr><th>Scapy</th><td>{{ 'present' if priv.scapy else 'missing (pip install scapy)' }}</td></tr>
+    <tr><th>Full capture</th><td>
+      <span class="chip {{ 'ok' if priv.full_capture else 'bad' }}">
+        {{ 'ENABLED — discovery, DNS sniffing, traffic control' if priv.full_capture else 'DISABLED — degraded discovery only' }}</span>
+    </td></tr>
+    <tr><th>Internet (host → outside)</th><td>
+      <span class="chip {{ 'ok' if internet.reachable else 'bad' }}">{{ 'reachable' if internet.reachable else 'unreachable' }}</span>
+      {% if internet.rtt_ms is not none %}<span class="muted">RTT {{ internet.rtt_ms }} ms</span>{% endif %}
+      <span class="muted">DNS {{ 'ok' if internet.dns_ok else 'failed' }}</span>
+      <span class="muted small">{{ internet.checked_at }}</span>
+    </td></tr>
+  </table>
+  <p class="muted small">With Administrator (Windows + Npcap) or root
+    (Linux/macOS) the host can ARP-scan, sniff DNS, and apply cut /
+    throttle / category-block to any device on the LAN — see everything
+    inside the network and control everything going outside it.</p>
+</div>
+
+<div class="card">
+  <h2>Network-wide category blocking <span class="muted small">block a category for ALL devices — including new ones</span></h2>
+  <p class="muted small">Checking a category below blocks it for every device
+    on the network at once: current devices AND any device that joins later
+    (picked up automatically on discovery). Per-device and group blocks still
+    work on top of this. Blocked categories' DNS is dropped and their IPs are
+    cut at the connection level for each device.</p>
+  <form method="post" action="{{ url_for('settings.global_block') }}">
+    <div class="check-grid">
+      {% for cname, cat in categories.items() %}
+      <label class="check">
+        <input type="checkbox" name="categories" value="{{ cname }}"
+               {{ 'checked' if cname in global_blocked }}>
+        {{ cat.label }}
+      </label>
+      {% endfor %}
+    </div>
+    <button class="btn primary" type="submit">Apply network-wide block</button>
+  </form>
+  {% if global_blocked %}
+  <p class="muted small">Currently blocked network-wide:
+    {% for c in global_blocked %}<span class="cat-badge">{{ category_labels.get(c, c) }}</span>{% endfor %}
+  </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>DNS bypass <span class="muted small">access DNS blocked by the router / firewall</span></h2>
+  <p class="muted small">Domains listed here are answered by NetShield itself
+    through a public resolver — so devices can reach them even when your
+    router or ISP firewall blocks them in its own DNS. The relay is
+    auto-enabled network-wide while the list is non-empty.</p>
+  <form method="post" action="{{ url_for('settings.dns_bypass') }}">
+    <label>Bypassed domains (one per line)
+      <textarea name="domains" rows="5">{{ dns_bypass_domains|join('\n') }}</textarea>
+    </label>
+    <label>Public resolver (IP)
+      <input type="text" name="resolver" value="{{ dns_bypass_resolver }}">
+    </label>
+    <button class="btn primary" type="submit">Save DNS bypass</button>
+  </form>
+  <p class="muted small">Defaults to 1.1.1.1 (Cloudflare). You can use any
+    public resolver: 8.8.8.8 (Google), 9.9.9.9 (Quad9), 208.67.222.222
+    (OpenDNS).</p>
+</div>
+
+<div class="card">
+  <h2>DNS history capture <span class="muted small">how per-device search history is collected</span></h2>
+  <form method="post" action="{{ url_for('settings.dns_capture') }}">
+    <label class="check">
+      <input type="checkbox" name="enabled" {{ 'checked' if full_capture }} onchange="this.form.submit()">
+      <strong>Full capture — ARP-spoof ALL devices and record every DNS query</strong>
+    </label>
+  </form>
+  <table class="kv">
+    <tr><th>Current mode</th><td>
+      {% if full_capture %}
+      <span class="chip warn">FULL — ARP-spoofing all devices</span>
+      <span class="muted small">{{ monitored_devices }} device(s) currently relayed</span>
+      {% else %}
+      <span class="chip">passive — this interface only</span>
+      {% endif %}
+    </td></tr>
+  </table>
+  {% if full_capture %}
+  <div class="banner warning small">
+    <strong>All device traffic is being relayed through this host.</strong>
+    Keep this machine running (it is the LAN's traffic path while active);
+    ARP entries are restored automatically when the app stops. If a session
+    shows <em>ineffective</em>, no traffic is reaching it — check that you
+    are Administrator/root, that the relay is on the correct interface, and
+    that the access point does not isolate clients.
+  </div>
+  {% else %}
+  <p class="muted small">Passive mode only sees DNS queries that cross this
+    host's interface (often nothing on Wi-Fi). Full capture ARP-spoofs every
+    device so their DNS — the domain history shown on Devices, Traffic,
+    reports — is always seen. Requires Administrator (Windows + Npcap) or
+    root.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Environment</h2>
+  <table class="kv">
+    <tr><th>Build</th><td><strong>v{{ app_version }}</strong>
+      <span class="muted small">({{ build_date }}) — if the sidebar shows
+      anything older than this, an old process is still running: stop it
+      and restart.</span></td></tr>
+    <tr><th>Network</th><td class="mono">{{ subnet }}</td></tr>
+    <tr><th>Gateway (resolved)</th><td class="mono">
+      {{ gateway_info.ip }}
+      {% if gateway_info.mac %}<span class="muted small">({{ gateway_info.mac }}
+        {% if gateway_info.vendor %}· {{ gateway_info.vendor }}{% endif %})</span>{% endif %}
+      <span class="muted small">via {{ gateway_info.source }}
+      {% if gateway_info.is_wifi %}(Wi-Fi interface){% endif %}</span>
+    </td></tr>
+    <tr><th>This host</th><td class="mono">{{ host_ip }}</td></tr>
+    <tr><th>Packet capability</th>
+      <td><span class="chip {{ 'ok' if packet_capable else 'bad' }}">
+        {{ 'FULL — capture, DNS sniffing, traffic control' if packet_capable
+           else 'DEGRADED — OS-table/ping discovery only (install Npcap + run as Administrator on Windows, root on Linux)' }}</span></td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Detection diagnostics</h2>
+  <table class="kv">
+    <tr><th>Registry</th><td>{{ device_count }} device(s) in DB
+      ({{ online_count }} online now)</td></tr>
+    <tr><th>Interface used</th><td class="mono">{{ last_report.iface if last_report else 'not run yet' }} (network {{ last_report.network if last_report else '—' }})</td></tr>
+    <tr><th>Last detection report</th><td>
+      {% if last_report %}
+      ARP broadcast <strong>{{ last_report.arp_broadcast }}</strong> &middot;
+      neighbour table <strong>{{ last_report.neighbor_table }}</strong> &middot;
+      ping sweep <strong>{{ last_report.ping_sweep }}</strong> &middot;
+      unique hosts <strong>{{ last_report.unique }}</strong> &middot;
+      {{ last_report.elapsed_s }}s<br>
+      <span class="muted small">skipped: {{ last_report.skipped.gateway }}
+      gateway, {{ last_report.skipped.self }} self,
+      {{ last_report.skipped.bad_mac }} bad MAC,
+      {{ last_report.skipped.other }} other (multicast/broadcast/outside
+      subnet)</span>
+      {% else %}
+      <span class="muted">No scan run yet — click "Scan now" on the Devices page.</span>
+      {% endif %}
+    </td></tr>
+    <tr><th>DNS capture</th><td>
+      <span class="chip {{ 'ok' if dns_stats.running else 'bad' }}">{{ 'running' if dns_stats.running else 'stopped' }}</span>
+      queries seen <strong>{{ dns_stats.queries_seen }}</strong> &middot;
+      history rows <strong>{{ dns_stats.rows_in_db }}</strong> &middot;
+      domains <strong>{{ dns_stats.domains_in_db }}</strong>
+      {% if dns_stats.last_error %}<br><span class="bad-text">last error:
+      {{ dns_stats.last_error }}</span>{% endif %}
+    </td></tr>
+  </table>
+  <p class="muted small">If devices are missing, check the last detection
+    report: it shows exactly how many hosts each method found and what was
+    filtered out (gateway / this host / bad MACs).</p>
+</div>
+
+{% if current_user.is_admin %}
+<div class="card">
+  <h2>Category domain lists</h2>
+  <p class="small muted">Matched by base (registrable) domain — all
+    subdomains are covered. The adult-content list is fetched at runtime from
+    the StevenBlack hosts project (see below) and cannot be hand-edited here.</p>
+  <form method="post" action="{{ url_for('settings.save_categories') }}" class="form-grid">
+    {% for cname, cat in categories.items() if cat.editable %}
+    <label>{{ cat.label }} <span class="muted small">({{ cname }})</span>
+      <textarea name="cat_{{ cname }}" rows="4">{{ cat.domains|join('\n') }}</textarea>
+    </label>
+    {% endfor %}
+    <button class="btn primary" type="submit">Save category lists</button>
+  </form>
+  <form method="post" action="{{ url_for('settings.reset_categories') }}">
+    <button class="btn" type="submit">Reset to built-in defaults</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Adult-content blocklist (StevenBlack hosts)</h2>
+  <table class="kv">
+    <tr><th>Status</th><td>
+      {% if blocklist.count %}<span class="chip ok">loaded</span>
+      {% else %}<span class="chip bad">not loaded</span>{% endif %}
+    </td></tr>
+    <tr><th>Domains</th><td>{{ blocklist.count }}</td></tr>
+    <tr><th>Source</th><td class="mono small">{{ blocklist.source or '—' }}</td></tr>
+    <tr><th>Last fetched</th><td>{{ blocklist.last_fetch or 'never' }}</td></tr>
+  </table>
+  <p class="small muted">Fetched from
+    github.com/StevenBlack/hosts (fakenews-gambling-porn alternates, falling
+    back to the base hosts file), parsed into a domain set, cached to disk
+    with a timestamp, refreshed daily. Works offline via the cache.</p>
+  <form method="post" action="{{ url_for('settings.refresh_blocklist') }}">
+    <button class="btn" type="submit">Refresh now</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Notifications <span class="muted small">off by default</span></h2>
+  <p class="small muted">Fired on: new device join, evil-twin / open-network
+    detection, per-device data-threshold breach.</p>
+  <form method="post" action="{{ url_for('settings.save_notifications') }}" class="form-grid">
+    <label>Generic webhook URL
+      <input type="url" name="webhook_url" value="{{ webhook_url }}" placeholder="https://…"></label>
+    <label>Discord webhook URL
+      <input type="url" name="discord_webhook" value="{{ discord_webhook }}" placeholder="https://discord.com/api/webhooks/…"></label>
+    <label>Telegram bot token
+      <input type="text" name="telegram_token" value="{{ telegram_token }}" placeholder="123456:ABC…"></label>
+    <label>Telegram chat ID
+      <input type="text" name="telegram_chat_id" value="{{ telegram_chat_id }}"></label>
+    <div class="field">
+      <span class="field-label">Enable events</span>
+      <label class="check"><input type="checkbox" name="notify_new_device" {{ 'checked' if notify_new_device }}> new device join</label>
+      <label class="check"><input type="checkbox" name="notify_wireless" {{ 'checked' if notify_wireless }}> evil twin / open network</label>
+      <label class="check"><input type="checkbox" name="notify_data_threshold" {{ 'checked' if notify_data_threshold }}> data-threshold breach</label>
+    </div>
+    <button class="btn primary" type="submit">Save notifications</button>
+  </form>
+  <form method="post" action="{{ url_for('settings.test_notifications') }}">
+    <button class="btn" type="submit">Send test notification</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Data</h2>
+  <div class="btn-row">
+    <form method="post" action="{{ url_for('settings.backup_db') }}">
+      <button class="btn" type="submit">&#11015; Download database backup</button>
+    </form>
+    <a class="btn" href="{{ url_for('settings.backup_json') }}">&#11015; Download JSON backup</a>
+    <form method="post" action="{{ url_for('settings.speedtest') }}">
+      <button class="btn" type="submit">&#128225; Internet speed test</button>
+    </form>
+    <form method="post" action="{{ url_for('traffic.clear_history') }}"
+          onsubmit="return confirm('Clear ALL device history (DNS queries + bandwidth samples)? This cannot be undone.')">
+      <button class="btn danger" type="submit">&#128465; Clear all device history</button>
+    </form>
+    <form method="post" action="{{ url_for('settings.reset_network') }}"
+          onsubmit="return confirm('Forget ALL devices + history and rescan the CURRENT network from scratch? This also runs automatically when you connect to a different Wi-Fi/router.')">
+      <button class="btn warn" type="submit">&#128260; Forget devices &amp; history (rescan this network)</button>
+    </form>
+  </div>
+  {% if speedtest_result %}
+  <p class="muted small">Last speed test: <strong>{{ speedtest_result.mbps }} Mbps</strong>
+    ({{ speedtest_result.at[:16].replace('T', ' ') }} UTC)</p>
+  {% endif %}
+  <p class="muted small">Backup downloads everything (devices, history,
+    settings, users). Clearing history wipes the DNS query log and bandwidth
+    samples — devices and their controls stay untouched.</p>
+</div>
+
+<div class="card">
+  <h2>Behaviour</h2>
+  <form method="post" action="{{ url_for('settings.auto_scan') }}" class="inline-form">
+    <label class="check">
+      <input type="checkbox" name="enabled" {{ 'checked' if auto_scan_new }} onchange="this.form.submit()">
+      Auto port-scan new devices when they join
+    </label>
+  </form>
+  <form method="post" action="{{ url_for('settings.save_scan_interval') }}" class="inline-form">
+    <label>Device scan interval (seconds)
+      <input type="number" name="scan_interval" value="{{ scan_interval }}" min="15"></label>
+    <button class="btn small" type="submit">Save</button>
+  </form>
+  <form method="post" action="{{ url_for('settings.save_retention') }}" class="inline-form">
+    <label>History retention (days)
+      <input type="number" name="retention_days" value="{{ retention_days }}" min="7"></label>
+    <button class="btn small" type="submit">Save</button>
+  </form>
+  <form method="post" action="{{ url_for('settings.save_data_threshold') }}" class="inline-form">
+    <label>Per-device data alert threshold (MB/day, 0 = off)
+      <input type="number" name="data_threshold_mb" value="{{ data_threshold_mb }}" min="0"></label>
+    <button class="btn small" type="submit">Save</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>User management</h2>
+  <p class="muted small">Account security audit (John-the-Ripper-style
+    thinking, defensive): flags accounts whose passwords are in the
+    most-guessed dictionary — exactly what an attacker would try first.
+    Passwords are never shown; only the flag is displayed.</p>
+  <table class="table">
+    <thead><tr><th>User</th><th>Role</th><th>Password</th><th>Last login</th></tr></thead>
+    <tbody>
+    {% for a in account_audit %}
+    <tr>
+      <td class="mono">{{ a.username }}</td>
+      <td>{{ a.role }}</td>
+      <td>
+        {% if a.weak %}<span class="chip bad">WEAK — commonly guessed</span>
+        {% else %}<span class="chip ok">ok</span>{% endif %}
+      </td>
+      <td>{{ a.last_login|localtime if a.last_login else '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% include "users.html" %}
+</div>
+{% else %}
+<div class="card">
+  <h2>Read-only</h2>
+  <p class="muted">Settings (category lists, blocklist, notifications, scan
+    interval, retention, users) are admin-only. You are signed in as
+    <strong>{{ current_user.username }}</strong> (standard role).</p>
+</div>
+{% endif %}
+{% endblock %}

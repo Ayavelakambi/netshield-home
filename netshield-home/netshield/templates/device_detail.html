@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bw_bars, risk_chip, sev_chip, cat_badges with context %}
+{% block title %}{{ device.display_name }} — Devices{% endblock %}
+{% block content %}
+<h1>
+  {{ device.nickname or device.display_name }}
+  <span class="muted small mono">{{ device.mac }}</span>
+  {% if device.is_private_mac %}<span class="cat-badge warn">randomised MAC</span>{% endif %}
+  <span class="chip {{ 'ok' if device.is_online else 'dim' }}">{{ 'online' if device.is_online else 'offline' }}</span>
+</h1>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Identity</h2>
+    <table class="kv">
+      <tr><th>Hostname</th><td>{{ hostname }}</td></tr>
+      <tr><th>Current IP</th><td class="mono">{{ device.current_ip }}</td></tr>
+      <tr><th>Vendor (OUI)</th><td>{{ device.vendor or '—' }}</td></tr>
+      <tr><th>OS guess</th><td>{{ device.os_guess or '—' }}</td></tr>
+      <tr><th>First seen</th><td>{{ device.first_seen|localtime }}</td></tr>
+      <tr><th>Last seen</th><td>{{ device.last_seen|localtime }}</td></tr>
+    </table>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('devices.set_nickname', mac=device.mac) }}" class="inline-form">
+      <input type="text" name="nickname" value="{{ device.nickname or '' }}" placeholder="Nickname">
+      <button class="btn small" type="submit">Save nickname</button>
+    </form>
+    <form method="post" action="{{ url_for('devices.set_group', mac=device.mac) }}" class="inline-form">
+      <select name="group_id">
+        <option value="">No group</option>
+        {% for g in groups %}
+        <option value="{{ g.id }}" {{ 'selected' if device.group_id == g.id }}>{{ g.name }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn small" type="submit">Assign group</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Control <span class="muted small">unified session: cut + throttle + category block</span></h2>
+    <p data-control-state-chip="{{ device.mac }}">
+      Current state:
+      <span class="chip ctl-{{ device.control_state }}" data-control-state="{{ device.mac }}">{{ device.control_state }}</span>
+      {% if device.speed_limit_kbps %}<span class="muted small">limit {{ device.speed_limit_kbps }} kbps</span>{% endif %}
+    </p>
+    {% if session %}
+    <table class="kv small">
+      <tr><th>Session</th><td>active (ARP spoof + relay)</td></tr>
+      <tr><th>Mode</th><td>{{ 'monitor — DNS capture for history' if session.monitor else 'control' }}</td></tr>
+      <tr><th>Effectiveness</th><td>
+        <span class="chip {{ 'ok' if session.effective == 'effective' else 'warn' if session.effective == 'warming' else 'bad' if session.effective == 'ineffective' else 'dim' }}">{{ session.effective }}</span>
+        {% if session.effective == 'ineffective' %}
+        <span class="muted small">no traffic seen — check privileges,
+          interface ({{ session.iface or 'auto' }}), AP client isolation</span>
+        {% endif %}
+      </td></tr>
+      <tr><th>Interface</th><td class="mono">{{ session.iface or 'auto' }}</td></tr>
+      <tr><th>DNS allowlist</th><td>{{ 'on' if session.dns_allowlist is not none else 'off' }}</td></tr>
+      <tr><th>Blocking</th><td>
+        {% if session.blocked_categories %}
+          {% for label, doms in session.blocked_categories.items() %}
+          <div><span class="cat-badge">{{ label }}</span>
+            <span class="muted small">{{ doms|join(', ') }}</span></div>
+          {% endfor %}
+        {% else %}
+          <span class="muted">nothing — full internet access</span>
+        {% endif %}
+      </td></tr>
+      <tr><th>Packets seen / forwarded / dropped</th><td class="mono">{{ session.stats.pkts_seen }} / {{ session.stats.pkts_forwarded }} / {{ session.stats.pkts_dropped }}</td></tr>
+      <tr><th>DNS queries logged / blocked</th><td class="mono">{{ session.stats.dns_logged }} / {{ session.stats.dns_blocked }}</td></tr>
+      <tr><th>Connections blocked (IP level)</th><td class="mono">{{ session.stats.ip_blocked }} <span class="muted small">({{ session.blocked_ips }} IPs learned)</span></td></tr>
+      <tr><th>Encrypted DNS (DoH/DoT)</th><td class="mono">{{ session.stats.doh_blocked }} blocked
+        {% if session.doh_enforced %}<span class="muted small">— enforced: the device must use plain DNS, which is logged &amp; filtered</span>{% endif %}
+      </td></tr>
+    </table>
+    {% if session.stats.dns_logged == 0 and session.doh_enforced %}
+    <p class="muted small">No DNS queries observed yet for this device. If it
+      was just blocked, its lookups may be cached — cached connections to the
+      blocked domains' IPs are cut immediately; new lookups are forced to
+      plain DNS (encrypted DNS is blocked) and appear in history within a
+      minute. IPv6 lookups are not intercepted.</p>
+    {% endif %}
+    {% endif %}
+    {% if current_user.is_admin %}
+    <div class="btn-row">
+      <form method="post" action="{{ url_for('devices.controls', mac=device.mac) }}">
+        <input type="hidden" name="action" value="cut">
+        <button class="btn danger" type="submit" {{ 'disabled' if not packet_capable }}>Cut</button>
+      </form>
+      <form method="post" action="{{ url_for('devices.controls', mac=device.mac) }}" class="inline-form">
+        <input type="hidden" name="action" value="throttle">
+        <input type="number" name="kbps" value="{{ device.speed_limit_kbps or 256 }}" min="16" class="w-90">
+        <button class="btn warn" type="submit" {{ 'disabled' if not packet_capable }}>Throttle kbps</button>
+      </form>
+      <form method="post" action="{{ url_for('devices.controls', mac=device.mac) }}">
+        <input type="hidden" name="action" value="restore">
+        <button class="btn" type="submit" {{ 'disabled' if not packet_capable }}>Restore</button>
+      </form>
+    </div>
+    {% if not packet_capable %}<p class="muted small">Traffic control requires
+      packet capture (Npcap + Administrator on Windows, root on Linux).</p>{% endif %}
+
+    <h3>DNS history capture <span class="muted small">no cut, no disconnect</span></h3>
+    <p>
+      <span class="chip {{ 'ok' if capture_on else 'dim' }}">{{ 'capture ON — history records live' if capture_on else 'capture OFF' }}</span>
+      <form method="post" action="{{ url_for('devices.dns_capture_toggle', mac=device.mac) }}" class="inline">
+        <button class="btn small" type="submit">{{ 'Stop DNS capture' if capture_on else 'Start DNS capture (no cut)' }}</button>
+      </form>
+    </p>
+    <p class="muted small">With capture on, this device's ARP traffic is
+      relayed transparently and every domain it queries is recorded in its
+      history — the device keeps working normally. (This is what the "Full
+      capture" setting does for all devices at once.)</p>
+    <p class="muted small">How the actions differ: <strong>Cut</strong> =
+      all IPv4 internet stopped. <strong>Throttle</strong> = speed limit.
+      <strong>Category block</strong> = ONLY the checked categories are
+      blocked — their DNS is dropped, their IPs are blocked at the
+      connection level (even from cache), and known encrypted-DNS endpoints
+      (DoH/DoT) are cut so the device can't bypass via Chrome/Firefox
+      "Secure DNS". Everything else continues. IPv6 traffic is not
+      intercepted.</p>
+
+    <h3>Category blocking</h3>
+    <form method="post" action="{{ url_for('devices.block_categories', mac=device.mac) }}">
+      <div class="check-grid">
+        {% set effective = device.effective_blocked_categories() %}
+        {% for cname, cat in categories.items() %}
+        <label class="check">
+          <input type="checkbox" name="categories" value="{{ cname }}"
+                 {{ 'checked' if cname in effective }}
+                 {{ 'disabled' if not cat.editable and cname in effective }}>
+          {{ cat.label }}
+          {% if cname == 'adult' %}<span class="muted small">({{ cat.fetched_count }} domains, StevenBlack)</span>{% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      <button class="btn small" type="submit" {{ 'disabled' if not packet_capable }}>Apply category block</button>
+    </form>
+    {% else %}
+    <p class="muted small">Control actions are admin-only. You have read-only
+      access.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Port scan &amp; threat intelligence
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('devices.start_scan', mac=device.mac) }}" class="inline">
+      <button class="btn small" type="submit" {{ 'disabled' if not packet_capable }}>Scan common ports</button>
+    </form>
+    {% endif %}
+  </h2>
+  {% if not packet_capable %}
+  <p class="muted">Port scanning is disabled without packet capture privileges
+    (degraded mode).</p>
+  {% elif scan %}
+    {% if scan.status == 'running' %}
+    <p class="muted">Scan of {{ scan.device_ip }} in progress — results appear
+      here when it completes (live update via Socket.IO).</p>
+    {% elif scan.status == 'error' %}
+    <p class="muted bad-text">Last scan of {{ scan.device_ip }} errored.</p>
+    {% elif panels %}
+    <p class="muted small">Scan of {{ scan.device_ip }} completed
+      {{ scan.completed_at|localtime }}. Advisory data is static/read-only —
+      NetShield Home never exploits findings.</p>
+    {% for p in panels %}
+    <div class="panel risk-border-{{ p.risk_level|lower }}">
+      <div class="panel-head">
+        <strong>{{ p.service_name or p.port }} <span class="mono">:{{ p.port }}</span></strong>
+        {{ risk_chip(p.risk_level) }}
+        <span class="chip {{ 'ok' if p.status == 'Open' else 'dim' }}">{{ p.status }}</span>
+      </div>
+      <p class="small">{{ p.plain_language }}</p>
+      {% for a in p.advisories %}
+      <div class="advisory">
+        <div class="small"><strong>{{ a.cve or 'General advisory' }}</strong>
+          {% if a.cvss %}<span class="muted">CVSS {{ a.cvss }}</span>{% endif %}
+        </div>
+        <p class="small">{{ a.description }}</p>
+        <p class="small fix"><strong>Remediation:</strong> {{ a.recommendation }}</p>
+      </div>
+      {% endfor %}
+      <p class="small fix"><strong>Remediation:</strong> {{ p.remediation }}</p>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="muted">Scan completed — no open ports found.</p>
+    {% endif %}
+  {% else %}
+  <p class="muted">No scan yet for this device.</p>
+  {% endif %}
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Bandwidth — last 7 days</h2>
+    {{ bw_bars(daily, "daily bandwidth") }}
+  </div>
+  <div class="card">
+    <h2>Bandwidth — last 8 weeks</h2>
+    {{ bw_bars(weekly, "weekly bandwidth") }}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Top domains — 30 days</h2>
+  {% if top30 %}
+  <table class="table">
+    <thead><tr><th>Domain</th><th>Count</th><th>Categories</th></tr></thead>
+    <tbody>
+    {% for d in top30 %}
+    <tr>
+      <td class="mono">{{ d.domain }}</td>
+      <td class="num">{{ d.count }}</td>
+      <td>{{ cat_badges(d.categories) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No DNS activity recorded for this device.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Query history
+    <a class="btn small" href="{{ url_for('reports.device_csv', mac=device.mac) }}">Export CSV</a>
+    <form method="post" action="{{ url_for('devices.ping_test', mac=device.mac) }}" class="inline">
+      <button class="btn small" type="submit">Ping test</button>
+    </form>
+    {% if current_user.is_admin %}
+    <form method="post" action="{{ url_for('devices.clear_device_history', mac=device.mac) }}" class="inline"
+          onsubmit="return confirm('Clear this device\\'s history? Cannot be undone.')">
+      <button class="btn small danger" type="submit">Clear this device's history</button>
+    </form>
+    {% endif %}
+  </h2>
+  <p class="muted small">History is captured automatically from this device's
+    DNS traffic while it is online — <strong>no need to cut or disconnect
+    it</strong>. Queries are logged even while the device is cut, throttled
+    or category-blocked. Use <strong>Start DNS capture</strong> above (or
+    <strong>Full capture</strong> in Settings) to record every device's
+    history live.</p>
+  <form method="get" class="inline-form">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search domain…">
+    <button class="btn small" type="submit">Filter</button>
+    {% if q %}<a class="btn small" href="{{ url_for('devices.detail', mac=device.mac) }}">Clear</a>{% endif %}
+  </form>
+  <table class="table">
+    <thead><tr><th>Domain</th><th>First seen</th><th>Last seen</th><th>Count</th></tr></thead>
+    <tbody>
+    {% for row in hist.items %}
+    <tr>
+      <td class="mono">{{ row.domain }}</td>
+      <td>{{ row.first_seen|localtime }}</td>
+      <td>{{ row.last_seen|localtime }}</td>
+      <td class="num">{{ row.total }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No matching rows.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if hist.pages > 1 %}
+  <div class="pagination">
+    {% if hist.has_prev %}<a class="btn small" href="?page={{ hist.prev_num }}{% if q %}&q={{ q }}{% endif %}">&larr; prev</a>{% endif %}
+    <span class="muted small">page {{ hist.page }} / {{ hist.pages }}</span>
+    {% if hist.has_next %}<a class="btn small" href="?page={{ hist.next_num }}{% if q %}&q={{ q }}{% endif %}">next &rarr;</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Active alerts for this device</h2>
+  {% if alerts %}
+  <table class="table">
+    <thead><tr><th>Type</th><th>Severity</th><th>Message</th><th>When</th></tr></thead>
+    <tbody>
+    {% for a in alerts %}
+    <tr>
+      <td class="mono">{{ a.type }}</td>
+      <td>{{ sev_chip(a.severity) }}</td>
+      <td>{{ a.message }}</td>
+      <td>{{ a.created_at|localtime }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No active alerts.</p>
+  {% endif %}
+</div>
+{% endblock %}

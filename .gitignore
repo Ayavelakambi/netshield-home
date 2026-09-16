@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+data/netshield.db
+data/netshield.db-wal
+data/netshield.db-shm
+data/secret_key
+data/netshield.log
+netshield.log
+netshield.log.1
+netshield.log.2
+netshield.log.3
+data/blocklist/
+.idea/
+BUILD_PROMPT.md

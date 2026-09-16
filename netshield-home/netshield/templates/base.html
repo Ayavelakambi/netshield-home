@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}NetShield Home{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" href="data:,">
+</head>
+<body class="{% block bodyclass %}{% endblock %}">
+{% if current_user.is_authenticated %}
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">&#128737;</span> NetShield<span class="brand-sub"> Home</span></div>
+    <nav class="nav">
+      <a href="{{ url_for('dashboard.index') }}" class="{{ 'active' if active_nav == 'dashboard' }}">Dashboard</a>
+      <a href="{{ url_for('devices.list_devices') }}" class="{{ 'active' if active_nav == 'devices' }}">Devices</a>
+      <a href="{{ url_for('wifi.index') }}" class="{{ 'active' if active_nav == 'wifi' }}">WiFi</a>
+      <a href="{{ url_for('traffic.index') }}" class="{{ 'active' if active_nav == 'traffic' }}">Traffic / History</a>
+      <a href="{{ url_for('alerts.index') }}" class="{{ 'active' if active_nav == 'alerts' }}">Alerts
+        <span class="badge" id="alert-count" style="display:none">0</span></a>
+      <a href="{{ url_for('reports.index') }}" class="{{ 'active' if active_nav == 'reports' }}">Reports</a>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('activity_logs.index') }}" class="{{ 'active' if active_nav == 'activity_logs' }}">Activity Log</a>
+      {% endif %}
+      <a href="{{ url_for('settings.index') }}" class="{{ 'active' if active_nav == 'settings' }}">Settings</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="user-name">{{ current_user.username }}</span>
+        <span class="role-chip {{ current_user.role }}">{{ current_user.role }}</span>
+      </div>
+      <div class="muted small" title="Build date: check Settings → Diagnostics">v{{ app_version }}</div>
+      <a class="muted" href="{{ url_for('auth.logout') }}">Sign out</a>
+    </div>
+  </aside>
+  <main class="content">
+    {% if full_capture_active %}
+    <div class="banner info">
+      <strong>Full DNS capture active</strong> — all device traffic is
+      relayed through this host (ARP spoof) so every device's domain history
+      is recorded. Keep this machine running; ARP entries are restored when
+      it stops.
+    </div>
+    {% endif %}
+    {% if not priv.elevated %}
+    <div class="banner warning">
+      <strong>Not running with administrator/root privileges — full packet
+      features are disabled.</strong>
+      Port scanning, ARP-based cut/throttle, DNS sniffing and WiFi BSSID
+      scanning need Administrator (Windows + Npcap) or root (Linux/macOS).
+      {% if priv.windows %}
+      <form method="post" action="{{ url_for('settings.relaunch_admin') }}" style="display:inline">
+        <button class="btn small" type="submit">Restart as Administrator</button>
+      </form>
+      {% endif %}
+    </div>
+    {% elif priv.windows and priv.npcap == False %}
+    <div class="banner warning">
+      <strong>Npcap is not installed.</strong> Install it from
+      <a href="https://npcap.com" target="_blank" rel="noopener">npcap.com</a>,
+      then restart NetShield Home, for packet capture to work.
+    </div>
+    {% elif not packet_capable %}
+    <div class="banner warning">
+      <strong>Packet capture unavailable — showing degraded discovery.</strong>
+      Port scanning, ARP-based cut/throttle, DNS sniffing and WiFi BSSID
+      scanning are disabled.
+    </div>
+    {% endif %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% else %}
+<div class="standalone">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block standalone %}{% endblock %}
+</div>
+{% endif %}
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

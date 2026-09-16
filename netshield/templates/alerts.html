@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev_chip with context %}
+{% block title %}Alerts — NetShield Home{% endblock %}
+{% block content %}
+<h1>Alerts <span class="muted small">{{ counts.total }} active</span></h1>
+
+<div class="toolbar">
+  <form method="get" class="inline-form">
+    <select name="severity" onchange="this.form.submit()">
+      <option value="">All severities</option>
+      {% for s in ["critical","high","medium","low","info"] %}
+      <option value="{{ s }}" {{ 'selected' if severity == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <select name="type" onchange="this.form.submit()">
+      <option value="">All types</option>
+      {% for t in types %}
+      <option value="{{ t }}" {{ 'selected' if alert_type == t }}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    <label class="check"><input type="checkbox" name="active" value="1"
+      {{ 'checked' if active_only }} onchange="this.form.submit()"> active only</label>
+    <button class="btn small" type="submit">Filter</button>
+  </form>
+  {% if current_user.is_admin %}
+  <form method="post" action="{{ url_for('alerts.clear') }}">
+    <button class="btn small danger" type="submit" onclick="return confirm('Clear ALL active alerts?')">Clear all</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="sev-row">
+  {% for s in ["critical","high","medium","low","info"] %}
+  <div class="sev-block">
+    <span class="chip sev-{{ s }}">{{ s }}</span>
+    <span class="sev-count">{{ counts.get(s, 0) }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <table class="table">
+    <thead><tr><th>Type</th><th>Severity</th><th>Device</th><th>Message</th>
+      <th>When</th><th></th></tr></thead>
+    <tbody>
+    {% for a in alerts.items %}
+    <tr class="{{ '' if a.active else 'dim' }}">
+      <td class="mono">{{ a.type }}</td>
+      <td>{{ sev_chip(a.severity) }}</td>
+      <td>
+        {% if a.device_mac %}
+        <a href="{{ url_for('devices.detail', mac=a.device_mac) }}" class="mono">{{ a.device_mac }}</a>
+        {% else %}—{% endif %}
+      </td>
+      <td>{{ a.message }}</td>
+      <td>{{ a.created_at|localtime }}</td>
+      <td>
+        {% if a.active and current_user.is_admin %}
+        <form method="post" action="{{ url_for('alerts.ack', alert_id=a.id) }}">
+          <button class="btn small" type="submit">Acknowledge</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No alerts match.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if alerts.pages > 1 %}
+  <div class="pagination">
+    {% if alerts.has_prev %}<a class="btn small" href="?page={{ alerts.prev_num }}{% if severity %}&severity={{ severity }}{% endif %}">&larr; prev</a>{% endif %}
+    <span class="muted small">page {{ alerts.page }} / {{ alerts.pages }}</span>
+    {% if alerts.has_next %}<a class="btn small" href="?page={{ alerts.next_num }}{% if severity %}&severity={{ severity }}{% endif %}">next &rarr;</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

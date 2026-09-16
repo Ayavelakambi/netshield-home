@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Reports — NetShield Home{% endblock %}
+{% block content %}
+<h1>Reports</h1>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Weekly report</h2>
+    <p class="small muted">Top devices by bandwidth, top domains by DNS query
+      count, and alerts in the period. CSV export needs zero extra
+      dependencies; PDF requires the optional <code>reportlab</code> package
+      (pip install reportlab).</p>
+    <div class="btn-row">
+      <a class="btn primary" href="{{ url_for('reports.weekly_csv') }}">Download CSV</a>
+      <a class="btn" href="{{ url_for('reports.weekly_pdf') }}">Download PDF</a>
+    </div>
+    <p class="small muted">Period: {{ preview.period_start.date() }} —
+      {{ preview.period_end.date() }} &middot; {{ preview.device_count }}
+      active device(s), {{ preview.alert_count }} alert(s),
+      {{ preview.total_bytes|fmt_bytes }} total traffic.</p>
+  </div>
+  <div class="card">
+    <h2>Per-device report</h2>
+    <p class="small muted">Domain history for one device (last 30 days,
+      adjustable via <code>?days=</code>).</p>
+    {% for d in devices %}<a class="btn small" href="{{ url_for('reports.device_csv', mac=d.mac) }}">{{ d.nickname or d.display_name }}</a>{% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Preview — top devices (7 days)</h2>
+  {% if preview.devices %}
+  <table class="table">
+    <thead><tr><th>MAC</th><th>Nickname</th><th>Vendor</th><th>OS</th>
+      <th>Up</th><th>Down</th><th>Total</th></tr></thead>
+    <tbody>
+    {% for d in preview.devices[:10] %}
+    <tr>
+      <td class="mono">{{ d.mac }}</td>
+      <td>{{ d.nickname or '—' }}</td>
+      <td>{{ d.vendor or '—' }}</td>
+      <td>{{ d.os_guess or '—' }}</td>
+      <td>{{ d.bytes_up|fmt_bytes }}</td>
+      <td>{{ d.bytes_down|fmt_bytes }}</td>
+      <td>{{ (d.bytes_up + d.bytes_down)|fmt_bytes }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No bandwidth data in the last 7 days.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Preview — top domains (7 days)</h2>
+  {% if preview.domains %}
+  <table class="table">
+    <thead><tr><th>Domain</th><th>Count</th><th>First seen</th><th>Last seen</th></tr></thead>
+    <tbody>
+    {% for d in preview.domains[:15] %}
+    <tr>
+      <td class="mono">{{ d.domain }}</td>
+      <td class="num">{{ d.count }}</td>
+      <td>{{ d.first_seen|localtime }}</td>
+      <td>{{ d.last_seen|localtime }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No DNS data in the last 7 days.</p>
+  {% endif %}
+</div>
+{% endblock %}

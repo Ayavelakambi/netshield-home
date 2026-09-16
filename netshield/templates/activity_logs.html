@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Activity Log — NetShield Home{% endblock %}
+{% block content %}
+<h1>Activity log <span class="muted small">admin only</span></h1>
+
+<div class="toolbar">
+  <form method="get" class="inline-form">
+    <select name="user">
+      <option value="">All users</option>
+      {% for u in usernames %}
+      <option value="{{ u }}" {{ 'selected' if user == u }}>{{ u }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="action" value="{{ action }}" placeholder="Action contains…">
+    <input type="date" name="from" value="{{ date_from or '' }}">
+    <input type="date" name="to" value="{{ date_to or '' }}">
+    <button class="btn small" type="submit">Filter</button>
+    {% if user or action or date_from or date_to %}
+    <a class="btn small" href="{{ url_for('activity_logs.index') }}">Clear</a>
+    {% endif %}
+  </form>
+</div>
+
+<div class="card">
+  <table class="table">
+    <thead><tr><th>User</th><th>Action</th><th>Timestamp</th></tr></thead>
+    <tbody>
+    {% for r in rows.items %}
+    <tr>
+      <td class="mono">{{ r.username }}</td>
+      <td>{{ r.action }}</td>
+      <td>{{ r.timestamp|localtime }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">No entries match.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if rows.pages > 1 %}
+  <div class="pagination">
+    {% if rows.has_prev %}<a class="btn small" href="?page={{ rows.prev_num }}{% if user %}&user={{ user }}{% endif %}">&larr; prev</a>{% endif %}
+    <span class="muted small">page {{ rows.page }} / {{ rows.pages }}</span>
+    {% if rows.has_next %}<a class="btn small" href="?page={{ rows.next_num }}{% if user %}&user={{ user }}{% endif %}">next &rarr;</a>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

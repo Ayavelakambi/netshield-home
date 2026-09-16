@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bw_bars, sev_chip with context %}
+{% block title %}Dashboard — NetShield Home{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+{% if cut_count %}
+<div class="banner warning">
+  <strong>{{ cut_count }} device(s) are currently CUT off the network.</strong>
+  <form method="post" action="{{ url_for('devices.restore_all') }}" style="display:inline">
+    <button class="btn small" type="submit">↺ Restore all</button>
+  </form>
+</div>
+{% endif %}
+
+{% if current_user.is_admin %}
+<div class="card">
+  <h2>Network control <span class="muted small">one click — cuts or restores every device</span></h2>
+  <div class="btn-row">
+    <form method="post" action="{{ url_for('devices.cut_all') }}"
+          onsubmit="return confirm('Cut {{ cut_count }} device(s) off the network?')">
+      <button class="btn danger" type="submit">&#128683; Cut all{% if cut_count %} ({{ cut_count }}){% endif %}</button>
+    </form>
+    <form method="post" action="{{ url_for('devices.restore_all') }}">
+      <button class="btn" type="submit">&#8634; Restore all{% if cut_count %} ({{ cut_count }}){% endif %}</button>
+    </form>
+  </div>
+  <p class="muted small">Cuts persist: a device that reconnects or changes IP
+    is cut again automatically. The router, this PC and anything outside the
+    network are never affected.</p>
+</div>
+{% endif %}
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-value">{{ total_devices }}</div>
+    <div class="stat-label">Total devices</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value online">{{ online_devices }}</div>
+    <div class="stat-label">Online now</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ alert_counts.total }}</div>
+    <div class="stat-label">Active alerts</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ alert_counts.critical }}</div>
+    <div class="stat-label">Critical alerts</div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Gateway &amp; internet <span class="muted small">inside → outside</span></h2>
+    <table class="kv">
+      <tr><th>Gateway</th><td class="mono">{{ gateway_info.ip }}
+        {% if gateway_info.mac %}<div class="mono small muted">{{ gateway_info.mac }}
+          {% if gateway_info.vendor %} · {{ gateway_info.vendor }}{% endif %}</div>{% endif %}
+      </td></tr>
+      <tr><th>Internet</th><td>
+        <span class="chip {{ 'ok' if internet.reachable else 'bad' }}">{{ 'up' if internet.reachable else 'down' }}</span>
+        {% if internet.rtt_ms is not none %}<span class="muted small">RTT {{ internet.rtt_ms }} ms</span>{% endif %}
+        <span class="muted small">DNS {{ 'ok' if internet.dns_ok else 'failed' }}</span>
+      </td></tr>
+    </table>
+    <p class="muted small">Devices inside the network are discovered by ARP;
+      what they look up outside is captured at the DNS layer.</p>
+  </div>
+
+  <div class="card">
+    <h2>Active alerts by severity</h2>
+    <div class="sev-row">
+      {% for sev in ["critical", "high", "medium", "low", "info"] %}
+      <div class="sev-block">
+        <span class="chip sev-{{ sev }}">{{ sev }}</span>
+        <span class="sev-count">{{ alert_counts.get(sev, 0) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted small">Alerts push live over Socket.IO — acknowledge them
+      from the <a href="{{ url_for('alerts.index') }}">Alerts</a> page.</p>
+  </div>
+
+  <div class="card">
+    <h2>Top domains today</h2>
+    {% if top_domains %}
+    <table class="table">
+      <tbody>
+      {% for d in top_domains %}
+      <tr>
+        <td class="mono">{{ d.domain }}</td>
+        <td class="num">{{ d.count }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No DNS activity recorded yet (packet capture must be
+      available).</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Recent scans</h2>
+    {% if recent_scans %}
+    <table class="table">
+      <thead><tr><th>Device IP</th><th>Started</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for s in recent_scans %}
+      <tr>
+        <td class="mono">{{ s.device_ip }}</td>
+        <td>{{ s.started_at|localtime }}</td>
+        <td><span class="chip {{ 'ok' if s.status == 'complete' else 'warn' if s.status == 'running' else 'bad' }}">{{ s.status }}</span></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No port scans yet. Run one from a device page
+      (admin).</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Recent activity</h2>
+    {% if recent_activity %}
+    <ul class="feed">
+      {% for a in recent_activity %}
+      <li><span class="feed-user">{{ a.username }}</span>
+        <span class="feed-action">{{ a.action }}</span>
+        <span class="feed-time">{{ a.timestamp|localtime }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">Nothing recorded yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Network traffic — last 7 days</h2>
+  {% if network_traffic and network_traffic|selectattr('up')|list|length or (network_traffic and network_traffic|selectattr('down')|list|length) %}
+  {{ bw_bars(network_traffic, "network traffic, last 7 days") }}
+  {% else %}
+  <p class="muted">No bandwidth samples yet (the capture engine samples every
+    {{ '60' }} seconds when packet capture is available).</p>
+  {% endif %}
+</div>
+{% endblock %}

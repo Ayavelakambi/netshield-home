@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}User management — NetShield Home{% endblock %}
+{% block content %}
+<h1>Users <span class="muted small">admin only</span></h1>
+
+<div class="card">
+  <h2>Create user</h2>
+  <form method="post" action="{{ url_for('users.create') }}" class="form-grid">
+    <label>Username <input type="text" name="username" minlength="3" required></label>
+    <label>Role
+      <select name="role">
+        <option value="standard">standard</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <button class="btn primary" type="submit">Create user</button>
+  </form>
+  <p class="muted small">A temporary password is generated and shown once;
+    the user must change it at first login.</p>
+</div>
+
+<div class="card">
+  <table class="table">
+    <thead><tr><th>Username</th><th>Role</th><th>Created</th><th>Last login</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+      <td class="mono"><strong>{{ u.username }}</strong></td>
+      <td><span class="chip {{ 'admin' if u.role == 'admin' else '' }}">{{ u.role }}</span></td>
+      <td>{{ u.created_at|localtime }}</td>
+      <td>{{ u.last_login|localtime if u.last_login else '—' }}</td>
+      <td>
+        <form method="post" action="{{ url_for('users.change_role', user_id=u.id) }}" class="inline">
+          <select name="role">
+            <option value="standard" {{ 'selected' if u.role == 'standard' }}>standard</option>
+            <option value="admin" {{ 'selected' if u.role == 'admin' }}>admin</option>
+          </select>
+          <button class="btn small" type="submit">Set role</button>
+        </form>
+        <form method="post" action="{{ url_for('users.reset_password', user_id=u.id) }}" class="inline">
+          <button class="btn small" type="submit">Reset password</button>
+        </form>
+        <form method="post" action="{{ url_for('users.delete', user_id=u.id) }}" class="inline">
+          <button class="btn small danger" type="submit" onclick="return confirm('Delete user {{ u.username }}?')">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
